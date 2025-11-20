@@ -4,6 +4,7 @@ import random
 import numpy as np
 import argparse
 import autogen
+from pathlib import Path
 from toolset_high import *
 from medagent import MedAgent
 from config import openai_config, llm_config_list
@@ -45,6 +46,18 @@ def judge(pred, ans):
 def set_seed(seed):
     random.seed(seed)
     np.random.seed(seed)
+
+def extract_prediction_from_logs(logs_joined: str) -> str:
+    prediction_end = logs_joined.rfind("TERMINATE")
+    if prediction_end == -1:
+        return ""
+    if '"cell": "' in logs_joined:
+        last_code_end = logs_joined.rfind('"\n}')
+    else:
+        last_code_end = logs_joined.rfind('Solution:')
+    if last_code_end == -1:
+        last_code_end = 0
+    return logs_joined[last_code_end:prediction_end]
 
 def main():
     parser = argparse.ArgumentParser()
@@ -164,6 +177,7 @@ def main():
         #print(contents[i])
         question = contents[i]['template']
         answer = contents[i]['answer']
+        answer_str = ', '.join(answer) if isinstance(answer, list) else str(answer)
 
         logs_string = []
         autogen_log = ""
@@ -215,70 +229,82 @@ def main():
 
                 # step 2: Execute with initial top-k
                 selected_memory = [long_term_memory[idx] for idx in top_k_indices]
-                logs_string, autogen_log = execute_with_memory(
-                    user_proxy,
-                    chatbot,
-                    question,
-                    answer,
-                    selected_memory
-                )
+                fallback_reason = None
 
-                # Step 3: Check if execution is correct
-                logs_string_joined = LOG_SEPARATOR.join(logs_string)
+                try:
+                    logs_string, autogen_log = execute_with_memory(
+                        user_proxy,
+                        chatbot,
+                        question,
+                        answer,
+                        selected_memory
+                    )
+                except Exception as exec_error:
+                    fallback_reason = "error"
+                    print(f"Exception during initial execution: {exec_error}")
+                    traceback.print_exc()
+                    logs_string = [
+                        f"[question] {question}",
+                        f"[error] {str(exec_error)}"
+                    ]
+                    autogen_log = LOG_SEPARATOR.join(logs_string)
+                else:
+                    # Step 3: Check if execution is correct
+                    logs_string_joined = LOG_SEPARATOR.join(logs_string)
 
-                if "TERMINATE" in logs_string_joined:
-                    # Extract prediction
-                    if '"cell": "' in logs_string_joined:
-                        last_code_end = logs_string_joined.rfind('"\n}')
+                    if "TERMINATE" in logs_string_joined:
+                        prediction = extract_prediction_from_logs(logs_string_joined)
+                        is_correct = judge(prediction, answer_str)
+
+                        if not is_correct:
+                            fallback_reason = "incorrect"
                     else:
-                        last_code_end = logs_string_joined.rfind('Solution:')
-                    prediction_end = logs_string_joined.rfind('TERMINATE')
-                    prediction = logs_string_joined[last_code_end:prediction_end]
+                        fallback_reason = "unfinished"
 
-                    if type(answer) == list:
-                        answer_str = ', '.join(answer)
-                    else:
-                        answer_str = str(answer)
+                rerank_reasons = {
+                    "incorrect": "incorrect",
+                    "unfinished": "unfinished (no TERMINATE found)",
+                    "error": "error encountered",
+                }
 
-                    is_correct = judge(prediction, answer_str)
+                needs_rerank = fallback_reason in rerank_reasons and len(candidate_indices) > 0
 
-                    # Step 4: If incorrect, use TracLLM attribution
-                    if not is_correct and len(candidate_indices) > 0:
-                        print("Initial execution incorrect. Running TracLLM attribution...")
+                if needs_rerank:
+                    print(f"Initial execution {rerank_reasons[fallback_reason]}. Running TracLLM attribution...")
 
-                        # Get attribution scores
-                        ranked_records = tracllm_wrapper.score_memory(
-                            query=question,
-                            response=autogen_log,
-                            recs=selected_memory
-                        )
+                    # Get attribution scores
+                    ranked_records = tracllm_wrapper.score_memory(
+                        query=question,
+                        response=autogen_log,
+                        recs=selected_memory
+                    )
 
-                        print(f"Attribution scores (highest to lowest):")
-                        for score, rec, rec_idx in ranked_records:
-                            print(f"Score: {score:.4f} - Question: {rec['question'][:50]}...")
+                    print(f"Attribution scores (highest to lowest):")
+                    for score, rec, rec_idx in ranked_records:
+                        print(f"Score: {score:.4f} - Question: {rec['question'][:50]}...")
 
-                        # Find most problematic memory
-                        highest_score, problematic_record, problematic_idx_in_topk = ranked_records[0]
+                    # Find most problematic memory
+                    highest_score, problematic_record, problematic_idx_in_topk = ranked_records[0]
 
-                        if problematic_idx_in_topk is not None:
-                            problematic_memory_idx = top_k_indices[problematic_idx_in_topk]
-                            print(f"Most problematic memory index: {problematic_memory_idx} (Score: {highest_score:.4f})")
+                    if problematic_idx_in_topk is not None:
+                        problematic_memory_idx = top_k_indices[problematic_idx_in_topk]
+                        print(f"Most problematic memory index: {problematic_memory_idx} (Score: {highest_score:.4f})")
 
-                            # Try replacing with next candidates
-                            max_replacements = min(10, len(candidate_indices))
+                        # Try replacing with next candidates
+                        max_replacements = min(10, len(candidate_indices))
 
-                            for replacement_attempt in range(max_replacements):
-                                if replacement_attempt >= len(candidate_indices):
-                                    break
+                        for replacement_attempt in range(max_replacements):
+                            if replacement_attempt >= len(candidate_indices):
+                                break
 
-                                replacement_idx = candidate_indices[replacement_attempt]
-                                print(f"\nReplacement attempt {replacement_attempt+1}: Replacing index {problematic_memory_idx} with {replacement_idx}")
+                            replacement_idx = candidate_indices[replacement_attempt]
+                            print(f"\nReplacement attempt {replacement_attempt+1}: Replacing index {problematic_memory_idx} with {replacement_idx}")
 
-                                # Create new memory selection
-                                new_selected_memory = selected_memory.copy()
-                                new_selected_memory[problematic_idx_in_topk] = long_term_memory[replacement_idx]
+                            # Create new memory selection
+                            new_selected_memory = selected_memory.copy()
+                            new_selected_memory[problematic_idx_in_topk] = long_term_memory[replacement_idx]
 
-                                # Re-execute
+                            try:
                                 new_logs_string, new_autogen_log = execute_with_memory(
                                     user_proxy,
                                     chatbot,
@@ -286,36 +312,40 @@ def main():
                                     answer,
                                     new_selected_memory
                                 )
-
-                                # Check new result
                                 new_logs_joined = LOG_SEPARATOR.join(new_logs_string)
+                            except Exception as exec_error:
+                                print(f"Replacement attempt {replacement_attempt+1} raised error: {exec_error}")
+                                traceback.print_exc()
+                                fallback_reason = "error"
+                                continue
 
-                                if "TERMINATE" in new_logs_joined:
-                                    if '"cell": "' in new_logs_joined:
-                                        last_code_end = new_logs_joined.rfind('"\n}')
-                                    else:
-                                        last_code_end = new_logs_joined.rfind('Solution:')
-                                    
-                                    prediction_end = new_logs_joined.rfind('TERMINATE')
-                                    new_prediction = new_logs_joined[last_code_end:prediction_end]
+                            # Check new result
+                            if "TERMINATE" in new_logs_joined:
+                                new_prediction = extract_prediction_from_logs(new_logs_joined)
+                                new_is_correct = judge(new_prediction, answer_str)
 
-                                    new_is_correct = judge(new_prediction, answer_str)
-
-                                    if new_is_correct:
-                                        print("Replacement successful! New execution is correct.")
-                                        logs_string = new_logs_string
-                                        autogen_log = new_autogen_log
-                                        is_correct = True
-                                        stats["tracllm_improved"] += 1
-                                        break
-                                    else:
-                                        print(f"Replacement attempt {replacement_attempt+1} still incorrect.")
-
+                                if new_is_correct:
+                                    print("Replacement successful! New execution is correct.")
+                                    logs_string = new_logs_string
+                                    autogen_log = new_autogen_log
+                                    is_correct = True
+                                    fallback_reason = None
+                                    execution_failed = False
+                                    stats["tracllm_improved"] += 1
+                                    break
                                 else:
-                                    print(f"Replacement attempt {replacement_attempt+1} did not terminate properly.")
+                                    fallback_reason = "incorrect"
+                                    print(f"Replacement attempt {replacement_attempt+1} still incorrect.")
 
-                            if not is_correct:
-                                print("All replacement attempts exhausted. Execution remains incorrect.")
+                            else:
+                                fallback_reason = "unfinished"
+                                print(f"Replacement attempt {replacement_attempt+1} did not terminate properly.")
+
+                        if not is_correct and fallback_reason:
+                            print("All replacement attempts exhausted. Execution remains unresolved.")
+
+                if fallback_reason == "error" and not is_correct:
+                    execution_failed = True
 
         except Exception as e:
             print(f"Exception during execution: {e}")
@@ -327,9 +357,7 @@ def main():
             execution_failed = True
         
         # Prepare answer for logging
-        if type(answer) == list:
-            answer = ', '.join(answer)
-        logs_string.append("Ground-Truth Answer ---> "+answer)
+        logs_string.append("Ground-Truth Answer ---> "+answer_str)
 
         # Define file paths
         log_directory = log_file_path.format(id=contents[i]['id'])
@@ -378,7 +406,7 @@ def main():
                 f.write(prediction_cleaned)
 
             if not use_tracllm:
-                result = judge(prediction, answer)
+                result = judge(prediction, answer_str)
             else:
                 result = is_correct
 
@@ -399,7 +427,7 @@ def main():
             else:
                 stats["incorrect"] += 1
                 print("Incorrect answer.")
-                print(f"Expected: {answer}")
+                print(f"Expected: {answer_str}")
                 print(f"Got: {prediction_cleaned}")
 
         else:
@@ -425,19 +453,59 @@ def main():
     end_time = time.time()
 
     # Final statistics
+    correct_pct = (stats['correct']/stats['total']*100) if stats["total"] > 0 else 0.0
+    tracllm_improved_pct = (stats["tracllm_improved"]/stats["tracllm_used"]*100) if stats["tracllm_used"] > 0 else 0.0
+    time_elapsed = end_time - start_time
+
     print(f"\n{'='*60}")
     print("FINAL RESULTS")
     print(f"{'='*60}")
     print(f"Total questions: {stats['total']}")
-    print(f"Correct: {stats['correct']} ({stats['correct']/stats['total']*100:.2f}%)")
+    print(f"Correct: {stats['correct']} ({correct_pct:.2f}%)")
     print(f"Incorrect: {stats['incorrect']}")
     print(f"Unfinished: {stats['unfinished']}")
     if stats["tracllm_used"] > 0:
         print(f"TracLLM Used: {stats['tracllm_used']}")
-        print(f"TracLLM Improved: {stats['tracllm_improved']} ({stats['tracllm_improved']/stats['tracllm_used']*100:.1f}%)")
+        print(f"TracLLM Improved: {stats['tracllm_improved']} ({tracllm_improved_pct:.1f}%)")
     print(f"Final memory bank size: {stats['memory_size']}")
-    print(f"Time elapsed: {end_time - start_time:.2f} seconds")
+    print(f"Time elapsed: {time_elapsed:.2f} seconds")
     print(f"{'='*60}")
+
+    # Persist final results
+    results_dir = Path(__file__).resolve().parents[2] / "results"
+    results_dir.mkdir(parents=True, exist_ok=True)
+    summary_lines = [
+        "=" * 60,
+        "FINAL RESULTS",
+        "=" * 60,
+        f"Total questions: {stats['total']}",
+        f"Correct: {stats['correct']} ({correct_pct:.2f}%)",
+        f"Incorrect: {stats['incorrect']}",
+        f"Unfinished: {stats['unfinished']}",
+        f"TracLLM Used: {stats['tracllm_used']}",
+        f"TracLLM Improved: {stats['tracllm_improved']} ({tracllm_improved_pct:.1f}%)" if stats["tracllm_used"] > 0 else "TracLLM Improved: 0 (0.0%)",
+        f"Final memory bank size: {stats['memory_size']}",
+        f"Time elapsed: {time_elapsed:.2f} seconds",
+    ]
+    final_results = "\n".join(summary_lines)
+    results_payload = {
+        "final_results": final_results,
+        "stats": {
+            "total_questions": stats["total"],
+            "correct": stats["correct"],
+            "correct_pct": round(correct_pct, 2),
+            "incorrect": stats["incorrect"],
+            "unfinished": stats["unfinished"],
+            "tracllm_used": stats["tracllm_used"],
+            "tracllm_improved": stats["tracllm_improved"],
+            "tracllm_improved_pct": round(tracllm_improved_pct, 1),
+            "memory_size": stats["memory_size"],
+            "time_elapsed_seconds": round(time_elapsed, 2),
+        },
+    }
+    results_path = results_dir / "results.json"
+    with open(results_path, "w") as results_file:
+        json.dump(results_payload, results_file, indent=2)
 
 if __name__ == "__main__":
     main()
