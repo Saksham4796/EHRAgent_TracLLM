@@ -1,0 +1,74 @@
+# Environment and secrets
+.env
+.env.*
+!.env.sample
+
+# Python bytecode and caches
+__pycache__/
+*.py[cod]
+*$py.class
+.python-version
+
+# Build / packaging
+build/
+dist/
+*.egg-info/
+.eggs/
+wheels/
+sdist/
+
+# Virtual environments
+.venv/
+venv/
+env/
+ENV/
+env.bak/
+venv.bak/
+
+# IDE / tooling
+.vscode/
+.idea/
+.ropeproject/
+.spyproject
+.ipynb_checkpoints
+.mypy_cache/
+.pytest_cache/
+.pdm.toml
+.cache/
+
+# Logs and run outputs
+logs/
+results/
+out/
+analysis/
+*.log
+*.npy
+coding/
+
+# Data and large assets
+data/
+EhrAgent/data/
+TracLLM/datasets/
+TracLLM/results/
+TracLLM/out/
+
+# Coverage / testing
+htmlcov/
+.tox/
+.nox/
+.coverage*
+coverage.xml
+nosetests.xml
+
+# Misc project artifacts
+pip-log.txt
+pip-delete-this-directory.txt
+*.manifest
+*.spec
+cython_debug/
+
+# Keep specific tracked paths under results if needed
+!results/.gitkeep
+!results/pred_results/
+!results/pred_results/**
+.git

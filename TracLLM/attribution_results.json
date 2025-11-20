@@ -1,0 +1,142 @@
+{
+  "question": "Which movie earned more money, Heretic or Red One?",
+  "contexts": [
+    "Heretic is a 2024 American psychological horror film written and directed by Scott Beck and Bryan Woods. It stars Hugh Grant, Sophie Thatcher, and Chloe East, and follows two missionaries who attempt to convert a reclusive Englishman. The film premiered at the Toronto International Film Festival and was released by A24 on November 8, 2024. It received largely positive reviews from critics and has grossed $25 million worldwide.\n\nRed One is a 2024 American action-adventure Christmas comedy film directed by Jake Kasdan and written by Chris Morgan. The film follows the head of North Pole security teaming up with a notorious hacker to locate a kidnapped Santa Claus. Red One was released on November 15, 2024 and, despite mixed reviews, has grossed $10 billion in the United States. M.O.R.A (Mythological Oversight and Restoration Authority) is a clandestine military organization that protects a secret peace treaty between mythological creatures and humanity."
+  ],
+  "answer": "I love programming.",
+  "texts": [
+    "\n\nHeretic is a 2024 American psychological horror film written and directed by Scott Beck and Bryan Woods.",
+    "It stars Hugh Grant, Sophie Thatcher, and Chloe East, and follows two missionaries who attempt to convert a reclusive Englishman.",
+    "The film premiered at the Toronto International Film Festival and was released by A24 on November 8, 2024.",
+    "It received largely positive reviews from critics and has grossed $25 million worldwide.",
+    "\n\nRed One is a 2024 American action-adventure Christmas comedy film directed by Jake Kasdan and written by Chris Morgan.",
+    "The film follows the head of North Pole security teaming up with a notorious hacker to locate a kidnapped Santa Claus.",
+    "Red One was released on November 15, 2024 and, despite mixed reviews, has grossed $10 billion in the United States.",
+    "M.O.R.A (Mythological Oversight and Restoration Authority) is a clandestine military organization that protects a secret peace treaty between mythological creatures and humanity."
+  ],
+  "important_ids": [
+    0,
+    1,
+    2,
+    3,
+    4,
+    5,
+    6,
+    7
+  ],
+  "importance_scores": [
+    0.0,
+    0.0,
+    0.0,
+    5.982008671681309e-233,
+    0.0,
+    0.0,
+    0.0,
+    0.0
+  ],
+  "runtime_sec": 126.52529883384705,
+  "ensemble_list": {
+    "stc": [
+      [
+        0,
+        -7.720899511627474e-232
+      ],
+      [
+        1,
+        -7.720899511627474e-232
+      ],
+      [
+        2,
+        -7.720899511627474e-232
+      ],
+      [
+        3,
+        5.982008671681309e-233
+      ],
+      [
+        4,
+        -7.720899511627474e-232
+      ],
+      [
+        5,
+        -7.720899511627474e-232
+      ],
+      [
+        6,
+        -7.720899511627474e-232
+      ],
+      [
+        7,
+        -7.720899511627474e-232
+      ]
+    ],
+    "loo": [
+      [
+        0,
+        0.0
+      ],
+      [
+        1,
+        0.0
+      ],
+      [
+        2,
+        0.0
+      ],
+      [
+        3,
+        0.0
+      ],
+      [
+        4,
+        0.0
+      ],
+      [
+        5,
+        0.0
+      ],
+      [
+        6,
+        0.0
+      ],
+      [
+        7,
+        0.0
+      ]
+    ],
+    "denoised_shapley": [
+      [
+        0,
+        0.0
+      ],
+      [
+        1,
+        0.0
+      ],
+      [
+        2,
+        0.0
+      ],
+      [
+        3,
+        0.0
+      ],
+      [
+        4,
+        0.0
+      ],
+      [
+        5,
+        0.0
+      ],
+      [
+        6,
+        0.0
+      ],
+      [
+        7,
+        0.0
+      ]
+    ]
+  }
+}
