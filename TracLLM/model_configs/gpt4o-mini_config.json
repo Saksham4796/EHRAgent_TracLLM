@@ -5,7 +5,7 @@
     },
     "api_key_info":{
         "api_keys":[
-            "YOUR_API_KEY"
+            "${OPENAI_API_KEY}"
         ],
         "api_key_use": 0
     },

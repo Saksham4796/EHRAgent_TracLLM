@@ -11,6 +11,7 @@ from config import openai_config, llm_config_list
 import time
 import traceback
 from execution import LOG_SEPARATOR, execute_with_memory
+from cost_tracker import LangChainOpenAICostTracker
 
 def judge(pred, ans):
     old_flag = True
@@ -63,6 +64,7 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--llm", type=str, default=os.getenv("LLM_MODEL"))
     parser.add_argument("--tracllm_config", type=str, default=os.getenv("TRACLLM_MODEL_CONFIG"))
+    parser.add_argument("--tracllm_model", type=str, default=os.getenv("TRACLLM_MODEL"))
     parser.add_argument("--tracllm_device", type=str, default=os.getenv("TRACLLM_DEVICE", "cpu"))
     parser.add_argument("--tracllm_top_k", type=int, default=int(os.getenv("TRACLLM_TOP_K", 5)))
     parser.add_argument("--tracllm_explanation_level", type=str, default=os.getenv("TRACLLM_EXPLANATION_LEVEL", "sentence"))
@@ -71,6 +73,7 @@ def main():
     parser.add_argument("--tracllm_beta", type=float, default=float(os.getenv("TRACLLM_BETA", 0.2)))
     parser.add_argument("--tracllm_loo_weight", type=float, default=float(os.getenv("TRACLLM_LOO_WEIGHT", 2)))
     parser.add_argument("--tracllm_verbose", type=int, default=int(os.getenv("TRACLLM_VERBOSE", 1)))
+    parser.add_argument("--tracllm_mode", type=str, default=os.getenv("TRACLLM_MODE"))
     parser.add_argument("--num_questions", type=int, default=int(os.getenv("NUM_QUESTIONS")))
     parser.add_argument("--dataset", type=str, default=os.getenv("DATASET"))
     parser.add_argument("--data_path", type=str, default=os.getenv("DATASET_PATH"))
@@ -83,9 +86,17 @@ def main():
     parser.add_argument("--use_memsize_after", type=int, default=int(os.getenv("USE_MEMORY_SIZE_AFTER")))
     args = parser.parse_args()
 
+    tracllm_mode = str(args.tracllm_mode or "overall").strip().lower()
+    if tracllm_mode not in {"overall", "partition"}:
+        print(f"Unknown tracllm_mode '{tracllm_mode}', defaulting to 'overall'.")
+        tracllm_mode = "overall"
+
     tracllm_score_funcs = [part.strip() for part in str(args.tracllm_score_funcs).split(",") if part.strip()]
 
     set_seed(args.seed)
+
+    cost_tracker = LangChainOpenAICostTracker()
+    cost_tracker.patch_openai()
 
     if args.dataset == 'mimic_iii':
         from prompts_mimic import EHRAgent_4Shots_Knowledge
@@ -184,6 +195,7 @@ def main():
         is_correct = False
 
         execution_failed = False
+        question_cost_snapshot = cost_tracker.snapshot()
 
         try:
             if not use_tracllm:
@@ -198,13 +210,14 @@ def main():
                 )
 
             else:
-                print("Using TracLLM-based memory retrieval...")
+                print(f"Using TracLLM-based memory retrieval (mode: {tracllm_mode})...")
                 stats["tracllm_used"] += 1
 
                 if tracllm_wrapper is None:
                     from tracllm_wrapper import TracLLMWrapper
                     tracllm_wrapper = TracLLMWrapper(
                         config_path=args.tracllm_config,
+                        model=args.tracllm_model,
                         device=args.tracllm_device,
                         explanation_level=args.tracllm_explanation_level,
                         top_k=args.tracllm_top_k,
@@ -273,15 +286,24 @@ def main():
                     print(f"Initial execution {rerank_reasons[fallback_reason]}. Running TracLLM attribution...")
 
                     # Get attribution scores
-                    ranked_records = tracllm_wrapper.score_memory(
-                        query=question,
-                        response=autogen_log,
-                        recs=selected_memory
-                    )
+                    if tracllm_mode == "partition":
+                        ranked_records = tracllm_wrapper.score_memory_partition(
+                            query=question,
+                            response=autogen_log,
+                            recs=selected_memory
+                        )
+                    else:
+                        ranked_records = tracllm_wrapper.score_memory_overall(
+                            query=question,
+                            response=autogen_log,
+                            recs=selected_memory
+                        )
 
                     print(f"Attribution scores (highest to lowest):")
                     for score, rec, rec_idx in ranked_records:
-                        print(f"Score: {score:.4f} - Question: {rec['question'][:50]}...")
+                        original_idx = top_k_indices[rec_idx] if rec_idx < len(top_k_indices) else rec_idx
+                        rec_id = rec.get("id", f"memory_idx_{original_idx}")
+                        print(f"Question: {rec.get('question','')}\nScore: {score:.4f}\nID: {rec_id}\n")
 
                     # Find most problematic memory
                     highest_score, problematic_record, problematic_idx_in_topk = ranked_records[0]
@@ -449,6 +471,11 @@ def main():
             print(f"  TracLLM Used: {stats['tracllm_used']}")
             print(f"  TracLLM Improved: {stats['tracllm_improved']}")
         print(f"  Memory Bank: {stats['memory_size']}")
+        question_cost = cost_tracker.delta_since(question_cost_snapshot)
+        cumulative_cost = cost_tracker.summary()
+        print(f"Cost for this question: ${question_cost['cost_usd']:.6f} "
+              f"(prompt tokens: {question_cost['prompt_tokens']}, completion tokens: {question_cost['completion_tokens']})")
+        print(f"Cumulative OpenAI cost so far: ${cumulative_cost['total_cost_usd']:.6f}")
 
     end_time = time.time()
 
@@ -456,6 +483,7 @@ def main():
     correct_pct = (stats['correct']/stats['total']*100) if stats["total"] > 0 else 0.0
     tracllm_improved_pct = (stats["tracllm_improved"]/stats["tracllm_used"]*100) if stats["tracllm_used"] > 0 else 0.0
     time_elapsed = end_time - start_time
+    cost_summary = cost_tracker.summary()
 
     print(f"\n{'='*60}")
     print("FINAL RESULTS")
@@ -469,23 +497,31 @@ def main():
         print(f"TracLLM Improved: {stats['tracllm_improved']} ({tracllm_improved_pct:.1f}%)")
     print(f"Final memory bank size: {stats['memory_size']}")
     print(f"Time elapsed: {time_elapsed:.2f} seconds")
+    print(f"Total OpenAI cost: ${cost_summary['total_cost_usd']:.6f}")
+    print(f"Prompt tokens: {cost_summary['prompt_tokens']}, Completion tokens: {cost_summary['completion_tokens']}")
     print(f"{'='*60}")
 
     # Persist final results
     results_dir = Path(__file__).resolve().parents[2] / "results"
     results_dir.mkdir(parents=True, exist_ok=True)
+    timestamp = time.strftime("%Y%m%d_%H%M%S")
+    dataset_slug = (args.dataset or "dataset").replace(" ", "-")
+    questions_run = stats["total"]
+    tracllm_mode_slug = tracllm_mode.replace(" ", "-")
+    results_filename = f"results_{timestamp}_{dataset_slug}_{tracllm_mode_slug}_{questions_run}.json"
     summary_lines = [
-        "=" * 60,
         "FINAL RESULTS",
-        "=" * 60,
         f"Total questions: {stats['total']}",
         f"Correct: {stats['correct']} ({correct_pct:.2f}%)",
         f"Incorrect: {stats['incorrect']}",
         f"Unfinished: {stats['unfinished']}",
+        f"TracLLM Mode: {tracllm_mode}",
         f"TracLLM Used: {stats['tracllm_used']}",
         f"TracLLM Improved: {stats['tracllm_improved']} ({tracllm_improved_pct:.1f}%)" if stats["tracllm_used"] > 0 else "TracLLM Improved: 0 (0.0%)",
         f"Final memory bank size: {stats['memory_size']}",
         f"Time elapsed: {time_elapsed:.2f} seconds",
+        f"Total OpenAI cost (USD): {cost_summary['total_cost_usd']:.6f}",
+        f"Prompt tokens: {cost_summary['prompt_tokens']}, Completion tokens: {cost_summary['completion_tokens']}",
     ]
     final_results = "\n".join(summary_lines)
     results_payload = {
@@ -499,11 +535,13 @@ def main():
             "tracllm_used": stats["tracllm_used"],
             "tracllm_improved": stats["tracllm_improved"],
             "tracllm_improved_pct": round(tracllm_improved_pct, 1),
+            "tracllm_mode": tracllm_mode,
             "memory_size": stats["memory_size"],
             "time_elapsed_seconds": round(time_elapsed, 2),
         },
+        "cost": cost_summary,
     }
-    results_path = results_dir / "results.json"
+    results_path = results_dir / results_filename
     with open(results_path, "w") as results_file:
         json.dump(results_payload, results_file, indent=2)
 

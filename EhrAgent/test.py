@@ -36,7 +36,7 @@ assistant: TERMINATE"""
         verbose=0,
     )
 
-    scores = wrapper.score_memory(query=query, response=autogen_log, recs=memory_records)
+    scores = wrapper.score_memory_overall(query=query, response=autogen_log, recs=memory_records)
     for score, rec, idx in scores:
         print(f"Memory idx={idx} score={score:.4f} | question='{rec['question']}'")
 
