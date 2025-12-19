@@ -86,6 +86,21 @@ class LangChainOpenAICostTracker:
             self.completion_tokens += completion_tokens
             self.total_cost += cost
 
+    def _sanitize_messages(self, messages):
+        """Ensure messages have string content (some providers reject null)."""
+        if not isinstance(messages, list):
+            return messages
+        cleaned = []
+        for msg in messages:
+            if not isinstance(msg, dict):
+                cleaned.append(msg)
+                continue
+            msg_copy = dict(msg)
+            if msg_copy.get("content") is None:
+                msg_copy["content"] = ""
+            cleaned.append(msg_copy)
+        return cleaned
+
     def patch_openai(self) -> None:
         """Monkey-patch the OpenAI client so every call is costed."""
         if self._patched:
@@ -105,6 +120,9 @@ class LangChainOpenAICostTracker:
             self._orig_chat_create = ChatCompletions.create
 
             def patched_chat_create(completions_self, *args, **kwargs):
+                if "messages" in kwargs:
+                    kwargs = dict(kwargs)
+                    kwargs["messages"] = self._sanitize_messages(kwargs["messages"])
                 response = self._orig_chat_create(completions_self, *args, **kwargs)
                 model = kwargs.get("model") or getattr(response, "model", None) or ""
                 usage = getattr(response, "usage", None)

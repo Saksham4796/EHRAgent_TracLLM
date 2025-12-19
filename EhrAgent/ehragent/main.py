@@ -243,7 +243,7 @@ def main():
         if args.debug and contents[i]['id'] != args.debug_id:
             continue
 
-        use_tracllm = len(long_term_memory) > args.use_memsize_after
+        use_tracllm = len(long_term_memory) >= args.use_memsize_after
 
         print(f"\n{'='*60}")
         print(f"Processing question {i+1}/{args.num_questions}")
@@ -395,7 +395,7 @@ def main():
                         print(f"Most problematic memory index: {problematic_memory_idx} (Score: {highest_score:.4f})")
 
                         # Try replacing with next candidates
-                        max_replacements = min(10, len(candidate_indices))
+                        max_replacements = min(5, len(candidate_indices))
 
                         for replacement_attempt in range(max_replacements):
                             if replacement_attempt >= len(candidate_indices):

@@ -2,6 +2,7 @@ import time
 from typing import Dict, List, Optional, Union, Callable, Literal, Optional, Union
 import logging
 import json
+import os
 from openai import OpenAI
 from autogen.agentchat import Agent, UserProxyAgent, ConversableAgent
 from termcolor import colored
@@ -38,7 +39,32 @@ class MedAgent(UserProxyAgent):
         self.question = ''
         self.code = ''
         self.knowledge = ''
-        
+
+    def _extract_code_block(self, message):
+        """Extract the last fenced code block from a message, if any."""
+        if isinstance(message, dict):
+            content = message.get("content") or ""
+        else:
+            content = message or ""
+        if not isinstance(content, str) or "```" not in content:
+            return None
+        parts = content.split("```")
+        if len(parts) < 3:
+            return None
+        code_block = parts[-2].strip()
+        if code_block.startswith(("python", "sql")):
+            code_block = code_block.split("\n", 1)[-1].strip()
+        return code_block or None
+
+    def _build_client(self, config):
+        client_kwargs = {
+            "api_key": config.get("api_key") or os.getenv("OPENAI_API_KEY"),
+        }
+        base_url = config.get("base_url") or os.getenv("BASE_URL")
+        if base_url:
+            client_kwargs["base_url"] = base_url
+        return OpenAI(**client_kwargs)
+
     def retrieve_knowledge(self, config, query):
         # import prompt
         if self.dataset == 'mimic_iii':
@@ -52,7 +78,7 @@ class MedAgent(UserProxyAgent):
         query_message = RetrKnowledge.format(question=query)
         messages = [{"role":"system","content":"You are an AI assistant that helps people find information."},
                     {"role":"user","content": query_message}]
-        client = OpenAI(api_key=config["api_key"])
+        client = self._build_client(config)
         while patience > 0:
             patience -= 1
             try:
@@ -137,6 +163,28 @@ class MedAgent(UserProxyAgent):
         request_reply: Optional[bool] = None,
         silent: Optional[bool] = False,
     ):
+        # If the assistant replied with a bare code block instead of a function call,
+        # coerce it into a python function_call so it gets executed.
+        if isinstance(message, dict) and "function_call" not in message:
+            code_block = self._extract_code_block(message)
+            if code_block:
+                message = {
+                    "role": message.get("role", "assistant"),
+                    "name": message.get("name"),
+                    "content": None,
+                    "function_call": {
+                        "name": "python",
+                        "arguments": json.dumps({"cell": code_block}),
+                    },
+                }
+        elif isinstance(message, dict) and "function_call" in message:
+            # Ensure arguments are strings for downstream parsing
+            func_args = message.get("function_call", {}).get("arguments")
+            if isinstance(func_args, dict):
+                message = dict(message)
+                message["function_call"] = dict(message.get("function_call", {}))
+                message["function_call"]["arguments"] = json.dumps(func_args)
+
         self._process_received_message(message, sender, silent)
         if request_reply is False or request_reply is None and self.reply_at_receive[sender] is False:
             return
@@ -157,7 +205,7 @@ class MedAgent(UserProxyAgent):
         query_message = CodeDebugger.format(question=self.question, code=code, error_info=error_info)
         messages = [{"role":"system","content":"You are an AI assistant that helps people debug their code. Only list one most possible reason to the errors."},
                     {"role":"user","content": query_message}]
-        client = OpenAI(api_key=config["api_key"])
+        client = self._build_client(config)
         while patience > 0:
             patience -= 1
             try:

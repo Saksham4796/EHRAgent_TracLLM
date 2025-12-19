@@ -5,10 +5,14 @@ from dotenv import load_dotenv
 load_dotenv(Path(__file__).resolve().parents[2] / ".env")
 
 def openai_config(model):
+    base_url = os.getenv("BASE_URL")
+    api_key = os.getenv("OPENAI_API_KEY")
     config = {
         "model": model,
-        "api_key": os.getenv("OPENAI_API_KEY")
-    }    
+        "api_key": api_key,
+    }
+    if base_url:
+        config["base_url"] = base_url
     return config
 
 def llm_config_list(seed, config_list):
